@@ -9,6 +9,22 @@ getClusNumStability <- function(subsampleProportions, nIterClusStability = 10, d
   return(nClusStability)
 }
 
+getClusNumStability2 <- function(subsampleProportions, nIterClusStability = 10, distObj,psCut, threads=1) {
+  
+  subsampIters <- sort(unlist(rep(subsampleProportions,nIterClusStability)))
+  doParallel::registerDoParallel(threads)
+  subsampNClusters <- foreach( x = seq(subsampIters)) %dopar% {
+      nClusWithSubsample( subsampIters[x] ,  distObj=distObj,psCut=psCut )
+  }
+  subsampNClusters = unlist(subsampNClusters)
+  #sapply(subsampIters, nClusWithSubsample, distObj=distObj,psCut=psCut) # this is slow
+  
+  names(subsampNClusters) <- subsampIters
+  nClusStability <- tibble(propSamples = subsampIters,numClusters = subsampNClusters)
+  
+  return(nClusStability)
+}
+
 nClusWithSubsample <- function(distObj,subsampleProp,psCut){
   nSamples <- length(labels(distObj))
   indx <- sample(x = 1:nSamples,size = floor(nSamples*subsampleProp),replace = F)
@@ -166,6 +182,17 @@ getClusMembStability <- function(subsampleProportions, numClusters,distObj) {
   rare <- lapply(subsampleProportions,clusterAssignSubsample,
                  distObj=distObj,numClusters=numClusters)
   rare <- do.call(rbind,rare)
+  rare$clusterID <- factor(rare$clusterID)
+  return(rare)
+}
+getClusMembStability2 <- function(subsampleProportions, numClusters,distObj, threads=1) {
+  doParallel::registerDoParallel(threads)
+  rare <- foreach( x = seq(subsampleProportions), .combine = "rbind" ) %dopar% {
+    clusterAssignSubsample( subsampleProportions[[x]] ,  distObj=distObj,numClusters=numClusters )
+  }
+  #rare <- lapply(subsampleProportions,clusterAssignSubsample,
+  #               distObj=distObj,numClusters=numClusters)
+  #rare <- do.call(rbind,rare)
   rare$clusterID <- factor(rare$clusterID)
   return(rare)
 }
