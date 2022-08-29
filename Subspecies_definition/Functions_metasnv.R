@@ -16,8 +16,8 @@ getClusNumStability2 <- function(subsampleProportions, nIterClusStability = 10, 
   subsampNClusters <- foreach( x = seq(subsampIters)) %dopar% {
       nClusWithSubsample( subsampIters[x] ,  distObj=distObj,psCut=psCut )
   }
+  doParallel::stopImplicitCluster()
   subsampNClusters = unlist(subsampNClusters)
-  #sapply(subsampIters, nClusWithSubsample, distObj=distObj,psCut=psCut) # this is slow
   
   names(subsampNClusters) <- subsampIters
   nClusStability <- tibble(propSamples = subsampIters,numClusters = subsampNClusters)
@@ -31,6 +31,7 @@ nClusWithSubsample <- function(distObj,subsampleProp,psCut){
   distDistinctSub <-as.dist(as.matrix(distObj)[indx,indx])
   res <- getClusPredStrengthResult(distDistinctSub,psCut=psCut, warn = FALSE)
   numClusters <- res[["optimalk"]]
+  if (is.null(numClusters)){ return(NA) }
   return(numClusters)
 }
 
@@ -190,6 +191,7 @@ getClusMembStability2 <- function(subsampleProportions, numClusters,distObj, thr
   rare <- foreach( x = seq(subsampleProportions), .combine = "rbind" ) %dopar% {
     clusterAssignSubsample( subsampleProportions[[x]] ,  distObj=distObj,numClusters=numClusters )
   }
+  doParallel::stopImplicitCluster()
   #rare <- lapply(subsampleProportions,clusterAssignSubsample,
   #               distObj=distObj,numClusters=numClusters)
   #rare <- do.call(rbind,rare)
@@ -400,4 +402,3 @@ getClusPredStrengthResult <- function(distObj,warn=T,defaultMaxNumClusters=10,
   }
   return(res)
 }
-

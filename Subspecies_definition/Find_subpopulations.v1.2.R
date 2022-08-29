@@ -28,6 +28,7 @@ Multi_th = args[6] #Number of threats to parallelize
 
 setwd(Output_dir)
 
+
 print( paste( c("Running analysis in ", Species), collapse="" ) )
 if(!dir.exists(Output_dir)){dir.create(Output_dir)}
 
@@ -40,9 +41,9 @@ Read_data  = function(){
 
   ##Reading with readR. No column names on bcftools-generated files. NAs are encoded as either "-1" or "."
   read_tsv(Samples,    col_names = F)            -> Samples
-  read_tsv(Matrix,     col_names = F)            -> Matrix
+  read_tsv(Matrix,     col_names = F, na = "-1") -> Matrix
   read_tsv(SNP,        col_names = F, na = "-1") -> SNP
-  read_tsv(AF,         col_names=F, na = ".")    -> AF
+  read_tsv(AF,         d, na = ".")    -> AF
   read_tsv(CohortInfo, col_names=T)              -> CohortInfo
 
   snp_location = paste(SNP$X1, SNP$X2, sep=":")
@@ -100,11 +101,14 @@ Find_pheasable_samples = function(AF, Samples, Matrix, homozygous_threshold = 0.
   colnames(Samples) = c("ID","Cohort","Homozygous_perc" )
   
   cbind(Matrix, Samples) %>% filter(Homozygous_perc > homozygous_threshold)  %>% as_tibble() -> Matrix_clustering
-  cbind(AF_clean, Samples) %>% filter(Homozygous_perc > homozygous_threshold)  %>% as_tibble() -> AF_clustering
+  #bind(AF_clean, Samples) %>% filter(Homozygous_perc > homozygous_threshold)  %>% as_tibble() -> AF_clustering
+  Samples$Homozygous_perc > homozygous_threshold -> KEEP
+  KEEP[is.na(KEEP)] = F
+  AF_clean[KEEP, ]  -> AF_clustering
   
   Matrix_clustering %>% select(c("ID","Cohort","Homozygous_perc" )) -> Samples_clustering
   Matrix_clustering %>% select(-c("ID","Cohort","Homozygous_perc" )) %>% as_tibble() -> Matrix_clustering
-  AF_clustering %>% select(-c("ID","Cohort","Homozygous_perc" )) %>% as_tibble() -> AF_clustering
+  #AF_clustering %>% select(-c("ID","Cohort","Homozygous_perc" )) %>% as_tibble() -> AF_clustering
   
   return(list(Matrix_clustering, Samples_clustering, AF_clustering))
 }
@@ -262,63 +266,92 @@ Genotype_samples = function(g_SNP, M, Samples, Min_abundace_dif=0.8, Prevalence_
   
 }
 
-print("Selection of samples and SNPs to be used in clustering analysis")
-Time_SNP_sample <- Sys.time()
 
-Find_pheasable_samples(AF, Samples, Matrix, homozygous_threshold = 0.9, percentage_homozygous = 0.8) -> R1
-Matrix_clustering = R1[[1]] ; Samples_clustering = R1[[2]] ; AF_clustering = R1[[3]]
-#I added this step before the third since if many samples have low coverage then the proportion of SNPs to remove because large NA is larger
-Remove_Samples_lowCoverage(Matrix_clustering, Samples_clustering, AF_clustering, Porcentage_missing =  0.6) -> R3
-Matrix_clustering = R3[[1]] ; Samples_clustering = R3[[2]] ; AF_clustering = R3[[3]]
+Do_work =  function(AF, Samples, Matrix, Number_samples, Number_SNP){
+  print("Selection of samples and SNPs to be used in clustering analysis")
+  Time_SNP_sample <- Sys.time()
 
-Remove_SNPLocations_with_high_missingRate(Matrix_clustering,SNP, Porcentage_missing=0.6) -> R2
-Matrix_clustering = R2[[1]] ; SNP_filtered = R2[[2]]
+  Find_pheasable_samples(AF, Samples, Matrix, homozygous_threshold = 0.9, percentage_homozygous = 0.8) -> R1
+  Matrix_clustering = R1[[1]] ; Samples_clustering = R1[[2]] ; AF_clustering = R1[[3]]
+  #I added this step before the third since if many samples have low coverage then the proportion of SNPs to remove because large NA is larger
+  Remove_Samples_lowCoverage(Matrix_clustering, Samples_clustering, AF_clustering, Porcentage_missing =  0.6) -> R3
+  Matrix_clustering = R3[[1]] ; Samples_clustering = R3[[2]] ; AF_clustering = R3[[3]]
 
-Remove_rare_SNP(Matrix_clustering, SNP_filtered, MAF_filter = 0.1) -> R4
-Matrix_clustering = R4[[1]] ; SNP_filtered = R4[[2]]
+  #Keep just 1,000 samples
+  if (dim(Samples_clustering)[1] > Number_samples ){
+sample(Samples_clustering$ID, Number_samples ,replace = F) -> Samples_choice
+Samples_clustering -> Samples_clustering_nosubs
+Samples_clustering %>% filter(ID %in% Samples_choice) -> Samples_clustering
+Matrix_clustering[Samples_clustering_nosubs$ID %in% Samples_choice, ] -> Matrix_clustering
+AF_clustering[Samples_clustering_nosubs$ID %in% Samples_choice, ] -> AF_clustering
+}
+  #
 
-AF_clustering %>% select(as.character(SNP_filtered$X2)) -> AF_clustering
-Time_SNP_sample_end <- Sys.time()
-print( paste0("Selection completed, time elapsed:", abs(Time_SNP_sample-Time_SNP_sample_end) ))
-Time_elapsed  = rbind(Time_elapsed, tibble(Operation = "Selection", Samples = dim(Matrix_clustering)[1], SNPs = dim(Matrix_clustering)[2], Time = Time_SNP_sample_end-Time_SNP_sample, C=1  ) )
+  Remove_SNPLocations_with_high_missingRate(Matrix_clustering,SNP, Porcentage_missing=0.6) -> R2
+  Matrix_clustering = R2[[1]] ; SNP_filtered = R2[[2]]
+
+  Remove_rare_SNP(Matrix_clustering, SNP_filtered, MAF_filter = 0.1) -> R4
+  Matrix_clustering = R4[[1]] ; SNP_filtered = R4[[2]]
+
+  AF_clustering %>% select(as.character(SNP_filtered$X2)) -> AF_clustering
+  Time_SNP_sample_end <- Sys.time()
+  print( paste0("Selection completed, time elapsed:", abs(Time_SNP_sample-Time_SNP_sample_end) ))
+  Time_elapsed  = rbind(Time_elapsed, tibble(Operation = "Selection", Samples = dim(Matrix_clustering)[1], SNPs = dim(Matrix_clustering)[2], Time = Time_SNP_sample_end-Time_SNP_sample, C=1  ) )
+
+  #Keep a maximum of  SNPs
+  if (dim(Matrix_clustering)[2] > Number_SNP ){
+    sample(colnames(Matrix_clustering) , Number_SNP ,replace = F) -> SNP_choice
+    Matrix_clustering -> Matrix_clustering_subset
+    Matrix_clustering[ , colnames(Matrix_clustering) %in% SNP_choice ] -> Matrix_clustering
+    AF_clustering[ , colnames(Matrix_clustering)  ] -> AF_clustering
+    SNP_filtered %>% filter(X2 %in% SNP_choice) -> SNP_filtered
+  }
 
 
+  print("Check that all dimensions match")
+  dim(Matrix_clustering) %>% print()
+  dim(Samples_clustering) %>% print()
+  dim(SNP_filtered) %>% print()
+  dim(AF_clustering) %>% print()
+  
+  print("Compute Distance")
+  Time_SNP_dist <- Sys.time()
+  #Distance based on genotype matrix
+  as.data.frame(Matrix_clustering) -> Matrix_clustering
+  #Somehow without this line the distance matrix has no labels
+  rownames(Matrix_clustering) = rownames(Matrix_clustering) 
+  # na.rm = T makes sure that only complete pairwise cases are used to compute distances
+  vegdist(Matrix_clustering, method = "manhattan", na.rm=T) -> Distance
+  PCOA = ape::pcoa(Distance)
+  as_tibble(PCOA$vectors) %>% mutate(Cohort = Samples_clustering$Cohort)  %>% ggplot(aes(x=Axis.1, y=Axis.2, color=Cohort)) + geom_point() -> PCA_color_by_cohort
+  Time_SNP_dist_end <- Sys.time()
+  print( paste0("Distance completed, time elapsed:", abs(Time_SNP_dist-Time_SNP_dist_end) ))
+  Time_elapsed  = rbind(Time_elapsed, tibble(Operation = "Distance", Samples = dim(Matrix_clustering)[1], SNPs = dim(Matrix_clustering)[2], Time = Time_SNP_dist_end-Time_SNP_dist, C = 1  ) )
+  
+  
+  print("Clustering - Slow")
+  Time_SNP_clustering <- Sys.time()
+  #This uses scripts from metaSNV2 for picking optimal number of clusters and assessing cluster and sample-in-cluster stabilities. I added multithreadening option
+  Clustering_results = Perform_clustering(Distance, threads = Multi_th)
+  Samples_clustering %>% mutate(Cluster = Clustering_results[[1]]) -> Samples_clustering
+  unlist(Clustering_results[[6]]) %>% as.data.frame() %>% rownames_to_column("Info") -> Report
+  Time_SNP_clustering_end <- Sys.time()
+  print( paste0("Clustering completed, time elapsed:", abs(Time_SNP_clustering-Time_SNP_clustering_end) ))
+  Time_elapsed  = rbind(Time_elapsed, tibble(Operation = "Clustering", Samples = dim(Matrix_clustering)[1], SNPs = dim(Matrix_clustering)[2], Time = Time_SNP_clustering_end-Time_SNP_clustering,C = Multi_th  ) )
+  
+  #I have also tested using AF_clustering as input for distance and clustering. Results are similar.
+  print("Clustering done, number of found clusters:")
+  # print(unique(Clustering_results[[6]]))
+  print(length(unique(as.factor(Samples_clustering$Cluster))))
+  print(Time_elapsed)
+  return(list(Time_elapsed, length(unique(as.factor(Samples_clustering$Cluster)))) )
+}
+  
+Do_work(AF,Samples, Matrix, 1000, 10000 )  
+Do_work(AF,Samples, Matrix, 1000, 20000 )  
+Do_work(AF,Samples, Matrix, 1000, 30000 )  
+#all of them find 2 clusters
 
-print("Check that all dimensions match")
-dim(Matrix_clustering) %>% print()
-dim(Samples_clustering) %>% print()
-dim(SNP_filtered) %>% print()
-dim(AF_clustering) %>% print()
-
-print("Compute Distance")
-Time_SNP_dist <- Sys.time()
-#Distance based on genotype matrix
-as.data.frame(Matrix_clustering) -> Matrix_clustering
-#Somehow without this line the distance matrix has no labels
-rownames(Matrix_clustering) = rownames(Matrix_clustering) 
-# na.rm = T makes sure that only complete pairwise cases are used to compute distances
-vegdist(Matrix_clustering, method = "manhattan", na.rm=T) -> Distance
-PCOA = ape::pcoa(Distance)
-as_tibble(PCOA$vectors) %>% mutate(Cohort = Samples_clustering$Cohort)  %>% ggplot(aes(x=Axis.1, y=Axis.2, color=Cohort)) + geom_point() -> PCA_color_by_cohort
-Time_SNP_dist_end <- Sys.time()
-print( paste0("Distance completed, time elapsed:", abs(Time_SNP_dist-Time_SNP_dist_end) ))
-Time_elapsed  = rbind(Time_elapsed, tibble(Operation = "Distance", Samples = dim(Matrix_clustering)[1], SNPs = dim(Matrix_clustering)[2], Time = Time_SNP_dist_end-Time_SNP_dist, C = 1  ) )
-
-
-print("Clustering - Slow")
-Time_SNP_clustering <- Sys.time()
-#This uses scripts from metaSNV2 for picking optimal number of clusters and assessing cluster and sample-in-cluster stabilities. I added multithreadening option
-Clustering_results = Perform_clustering(Distance, threads = Multi_th)
-Samples_clustering %>% mutate(Cluster = Clustering_results[[1]]) -> Samples_clustering
-unlist(Clustering_results[[6]]) %>% as.data.frame() %>% rownames_to_column("Info") -> Report
-Time_SNP_clustering_end <- Sys.time()
-print( paste0("Clustering completed, time elapsed:", abs(Time_SNP_clustering-Time_SNP_clustering_end) ))
-Time_elapsed  = rbind(Time_elapsed, tibble(Operation = "Clustering", Samples = dim(Matrix_clustering)[1], SNPs = dim(Matrix_clustering)[2], Time = Time_SNP_clustering_end-Time_SNP_clustering,C = Multi_th  ) )
-
-#I have also tested using AF_clustering as input for distance and clustering. Results are similar.
-print("Clustering done, number of found clusters:")
-# print(unique(Clustering_results[[6]]))
-print(length(unique(as.factor(Samples_clustering$Cluster))))
 
 print("Writing Clustering report")
 paste(Species, ".Clusters_discovery.tsv", sep = "")                        -> Output_ClusterDiscovery
